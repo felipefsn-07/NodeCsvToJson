@@ -1,8 +1,14 @@
-var lodash = require('lodash');
-const PNF = require('google-libphonenumber').PhoneNumberFormat;
-// Get an instance of `PhoneNumberUtil`.
 const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance()
+const fs = require('fs');
+const csvToObj = require('csv-to-js-parser').csvToObj;
+const combineArrays = require('csv-to-js-parser').combineArrays;
+const arg = require('arg');
+const args = arg({
+	// Types
+	'--input': String,
+	'--output': String,
 
+});
 
 //Buscar cabecalho do CSV
 function getHeaders (data){
@@ -18,7 +24,6 @@ function alterarIndeceRepitido (headers, data){
     var indexDosRepetidos = 0;
     for (var i = 0; i<headers.length; i++){
             if (repeated == headers[i]){
-                //res.push (headers[i].replace(/"/g, '').toString());
                 headers[i] = (headers[i] +" "+ indexDosRepetidos.toString()).toString();
                 indexDosRepetidos++; 
             }
@@ -54,14 +59,28 @@ function isTrue (value){
     }
 }
 
+//separar elementos
+function separarElemento(value){
+    let re = RegExp (',| \/ |;|\/| , | ; ');
+    let res = value.split(re);
+    return res;
+
+}
+
+//Remover duplicatas 
+function removeDuplicate (value){
+    var uniqueArray = value.filter(function(item, pos) {
+        return value.indexOf(item) == pos;
+    })
+    return uniqueArray;
+}
+
 //ajustar invisible e see_all
 function ajustarInvisibleSee (value){
     var removerDuplicata=  removeDuplicate (value);
     var res = false;
-
     for (var i = 0; i<removerDuplicata.length; i++){
          res= isTrue (removerDuplicata[i]);
-      
     }
     return res;
 
@@ -73,11 +92,15 @@ function ajustarGroup (group){
     for (var i = 0; i<group.length; i++){
         Object.entries(group[i]).forEach(([key, value]) => {
             if (value != null){
-                values.push (separarElemento(value.toString().trim()));
+                values.push (separarElemento(value));
             }
         });
     }
+
     values =  removeDuplicate (values.join(",").split(","));
+    values = values.map(element => {
+        return element.trim();
+      });
     return values;
 
 }
@@ -87,7 +110,8 @@ function validarPhone (valuePhone){
     try {
         if ( phoneUtil.isValidNumberForRegion(phoneUtil.parse(valuePhone, 'BR'), 'BR')){
             var number = phoneUtil.parseAndKeepRawInput(valuePhone, 'BR');
-            number = number.getNationalNumber().toString();
+            
+            number =number.getCountryCode() + number.getNationalNumber().toString();
             return number;     
         }else{
             return null;
@@ -97,7 +121,7 @@ function validarPhone (valuePhone){
      }
 }
 
-
+//Validar email
 function validarEmail (valueEmail){
     let re = RegExp ('\\S+[a-z0-9]@[a-z0-9\\.]+');
     var arr = valueEmail.match(re);
@@ -108,8 +132,7 @@ function validarEmail (valueEmail){
 }
 
 //Mapear os enderecos 
-function criarNovoIndiceValorEndereco (key, values, type){
-    var newAddress = [];
+function criarNovoIndiceValorEndereco (key, values, type, newAddress){
     for (var i = 0; i<values.length; i++){
         var value = null;
         if (type == "phone"){
@@ -117,49 +140,32 @@ function criarNovoIndiceValorEndereco (key, values, type){
 
         }else if (type == "email"){
             value = validarEmail (values[i]);
-
         }
         if (value != null){
-
             var separarKey = key.split(" ");
             var tags = separarKey.filter((item) => item !== type);
-            newAddress.push(JSON.stringify({
+            newAddress.push({
                 type: type,
                 tags: tags,
                 address: value
-            }));
+            });
         }
     }
-
-    console.log (newAddress)
-    return newAddress;
-
 }
 
-//ajustar adresses email phone
+//Ajustar addresses email phone
 function ajustarEnderecosEmailPhone (address){
-
-    
-    var values = [];
+    let values = [];
     for (var i = 0; i<address.length; i++){
         Object.entries(address[i]).forEach(([key, value]) => {
-            var res = value;
-
             if (value != null){
                 value = separarElemento(value.toString());
                  if(key.includes("phone") ){   
-                    value = criarNovoIndiceValorEndereco (key.toString(), value , "phone")
-                    if (value.length > 0)
-                        values.push(value)
-            
+                    criarNovoIndiceValorEndereco (key.toString(), value , "phone", values)
+           
                 } else if (key.includes("email") ){
-
-                    value = criarNovoIndiceValorEndereco (key.toString(), value , "email")
-                    if (value.length > 0)
-                        values.push(value)
-        
+                    criarNovoIndiceValorEndereco (key.toString(), value , "email", values)
                 }
-                //console.log (value);
             }
            
         });
@@ -168,88 +174,75 @@ function ajustarEnderecosEmailPhone (address){
     return values;
 }
 
-
-//separar elementos
-function separarElemento(value){
-    let re = RegExp (',| \/ |;|\/| , | ; ');
-    let res = value.split(re);
-    return res;
-
-}
-
-function removeDuplicate (value){
-    var uniqueArray = value.filter(function(item, pos) {
-        return value.indexOf(item) == pos;
-    })
-    return uniqueArray;
-}
-
-
-function ajustarJson (objJson){
-
+//Ajustar Json final
+function ajustarJson (objJson){   
     for (var i = 0; i<objJson.length; i++){
-        Object.entries(objJson[i]).forEach(([key, value]) => {
-
-            
+        Object.entries(objJson[i]).forEach(([key, value]) => {          
             if (key.includes("group")){
                 value = ajustarGroup (value);
                 objJson[i][key] = value;
-                //console.log(objJson[i][key]);
-                //delete objJson[i][key]; 
-            } else if (key.includes("adresses")){
+                if (value == "" || value == null)
+                delete objJson[i][key];
+                
+            } else if (key.includes("addresses")){
                 value = ajustarEnderecosEmailPhone (value);
-
                 objJson[i][key] =value;
-
-
             } else if (key.includes("invisible") || key.includes("see_all")){
                 objJson[i][key] =  ajustarInvisibleSee (value);
-
             }
         });
-       
-    }
 
-   
+    }
     return objJson;
 }
 
 
-const fs = require('fs');
-const { head, split } = require('lodash');
-const csvToObj = require('csv-to-js-parser').csvToObj;
+function converterCsvToJson (data){
+    const headers =  getHeaders (data);
+    data = alterarIndeceRepitido (headers, data);
+    var description = ordemCabecalho (headers);
+    let obj = csvToObj(data, ',', description);
+    var group = headers.slice(0).filter((item) => item.includes ("group"));
+    var adressHeader = headers.slice(0).filter((item) => item.includes("phone") || item.includes ("email"));
+    obj = combineArrays(obj, 'groups',group);
+    obj = combineArrays(obj, 'addresses', adressHeader);
+    obj = ajustarJson (obj);
+    return obj;
+
+}
+
+function lerCsv (path){
+    var data = fs.readFileSync(path).toString();
+    return data;
+}
+
+function escreverJson (path, jsonObject){
+    var json= JSON.stringify(jsonObject, null, '  ');
+    fs.writeFileSync(path, json);
+}
 
 
-var data = fs.readFileSync('input.csv').toString();
-const headers =  getHeaders (data);
-var repeated = [];
+function main() {
+    try {
+        if (args['--input'] != "" || args['--input'] != null){
+            var data =  lerCsv (args['--input'])
+            let obj = converterCsvToJson(data);
+            var output = 'data.json';
+            if (args['--output'] != "" || args['--output'] != null)
+                output = args['--output'];
+            
+            escreverJson (output, obj)
+        }
 
-
-data = alterarIndeceRepitido (headers, data);
-
-
-var description = ordemCabecalho (headers);
-//console.log (description);
-
-let obj = csvToObj(data, ',', description);
-
-
-var group = headers.slice(0).filter((item) => item.includes ("group"));
-var adressHeader = headers.slice(0).filter((item) => item.includes("phone") || item.includes ("email"));
-var combineArrays = require('csv-to-js-parser').combineArrays;
-
-
-obj = combineArrays(obj, 'group',group);
-obj = combineArrays(obj, 'adresses', adressHeader);
-obj = ajustarJson (obj);
-
-console.log (obj);
-
-
-
-var json= JSON.stringify( obj, ["fullname","eid","group", "adresses", "invisible", "see_all"], ' ');
-console.log("finalizado");
-
-fs.writeFileSync('data.json', json);
-
-//console.log (JSON.stringify(obj));
+    } catch (err) {
+        if (err.code === 'ARG_UNKNOWN_OPTION') {
+            console.log(err.message);
+        } else {
+            console.log("Insira corretamente os argumentos --input (o arquivo csv) e --output (onde será salvo o arquivo tranformado para JSON)")
+        }
+    }
+  }
+  
+  if (require.main === module) {
+    main();
+  }
